@@ -1,0 +1,153 @@
+pipeline {
+    agent any
+    
+    environment {
+        QUALITY_REPORT = 'quality_report.json'
+        MIN_QUALITY_SCORE = '70'
+        MAX_HIGH_ISSUES = '5'
+    }
+    
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+        
+        stage('Setup') {
+            steps {
+                sh '''
+                    python -m pip install --upgrade pip
+                    pip install -r requirements.txt
+                '''
+            }
+        }
+        
+        stage('Code Quality Analysis') {
+            steps {
+                script {
+                    echo '🔍 Running Code Quality Analysis...'
+                    
+                    // Run analysis
+                    sh '''
+                        python -m code_quality_agent.cli.main analyze src/ \
+                            --output-format json \
+                            --output-file ${QUALITY_REPORT} \
+                            --min-severity medium \
+                            --no-cache
+                    '''
+                }
+            }
+        }
+        
+        stage('Quality Gate') {
+            steps {
+                script {
+                    echo '🚪 Checking Quality Gates...'
+                    
+                    // Parse quality metrics
+                    def report = readJSON file: env.QUALITY_REPORT
+                    def criticalIssues = report.summary.issues_by_severity.critical ?: 0
+                    def highIssues = report.summary.issues_by_severity.high ?: 0
+                    def qualityScore = report.summary.quality_score
+                    
+                    echo "Quality Metrics:"
+                    echo "- Critical Issues: ${criticalIssues}"
+                    echo "- High Issues: ${highIssues}"
+                    echo "- Quality Score: ${qualityScore}/100"
+                    
+                    // Quality Gate 1: No critical issues allowed
+                    if (criticalIssues > 0) {
+                        error("❌ Quality Gate Failed: Found ${criticalIssues} critical issues!")
+                    }
+                    
+                    // Quality Gate 2: Limited high severity issues
+                    if (highIssues > env.MAX_HIGH_ISSUES.toInteger()) {
+                        error("❌ Quality Gate Failed: Found ${highIssues} high issues (max: ${env.MAX_HIGH_ISSUES})!")
+                    }
+                    
+                    // Quality Gate 3: Minimum quality score
+                    if (qualityScore < env.MIN_QUALITY_SCORE.toInteger()) {
+                        echo "⚠️ Warning: Quality score is low (${qualityScore} < ${env.MIN_QUALITY_SCORE})"
+                        // This is a warning, not a failure
+                    }
+                    
+                    echo "✅ All quality gates passed!"
+                }
+            }
+        }
+        
+        stage('Security Check') {
+            steps {
+                script {
+                    echo '🔒 Running Security-Focused Analysis...'
+                    
+                    // Run security-specific analysis
+                    sh '''
+                        python -m code_quality_agent.cli.main analyze src/ \
+                            --categories security \
+                            --output-format json \
+                            --output-file security_report.json \
+                            --no-cache
+                    '''
+                    
+                    // Check security issues
+                    def securityReport = readJSON file: 'security_report.json'
+                    def securityIssues = securityReport.summary.total_issues
+                    
+                    if (securityIssues > 0) {
+                        echo "⚠️ Found ${securityIssues} security issues - review required"
+                        // Archive security report for review
+                        archiveArtifacts artifacts: 'security_report.json'
+                    } else {
+                        echo "✅ No security issues found"
+                    }
+                }
+            }
+        }
+    }
+    
+    post {
+        always {
+            // Archive quality reports
+            archiveArtifacts artifacts: '*.json', allowEmptyArchive: true
+            
+            // Publish quality report
+            script {
+                if (fileExists(env.QUALITY_REPORT)) {
+                    def report = readJSON file: env.QUALITY_REPORT
+                    
+                    // Create build description with quality metrics
+                    currentBuild.description = """
+                        Quality Score: ${report.summary.quality_score}/100
+                        Issues: ${report.summary.total_issues}
+                        Critical: ${report.summary.issues_by_severity.critical ?: 0}
+                    """.stripIndent()
+                }
+            }
+        }
+        
+        success {
+            echo '✅ Build completed successfully with acceptable code quality!'
+        }
+        
+        failure {
+            echo '❌ Build failed due to code quality issues!'
+            
+            // Send notification (example)
+            script {
+                if (fileExists(env.QUALITY_REPORT)) {
+                    def report = readJSON file: env.QUALITY_REPORT
+                    def criticalIssues = report.summary.issues_by_severity.critical ?: 0
+                    def highIssues = report.summary.issues_by_severity.high ?: 0
+                    
+                    if (criticalIssues > 0 || highIssues > env.MAX_HIGH_ISSUES.toInteger()) {
+                        // Send notification to team
+                        echo "Sending notification about quality gate failure..."
+                        // emailext, Slack, etc. integration here
+                    }
+                }
+            }
+        }
+    }
+}

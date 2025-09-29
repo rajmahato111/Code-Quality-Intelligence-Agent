@@ -1,0 +1,123 @@
+version: '3.8'
+
+services:
+  # Main application service
+  cqa-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cqa-app
+    ports:
+      - "8000:8000"
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CQA_CACHE_DIR=/app/cache
+      - CQA_LOG_LEVEL=INFO
+      - CQA_MAX_WORKERS=4
+    volumes:
+      - cqa-cache:/app/cache
+      - cqa-logs:/app/logs
+      - cqa-data:/app/data
+      # Mount local code for development
+      - ./code_quality_agent:/app/code_quality_agent:ro
+    depends_on:
+      - redis
+      - chromadb
+    networks:
+      - cqa-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # Redis for caching and session storage
+  redis:
+    image: redis:7-alpine
+    container_name: cqa-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - cqa-network
+    restart: unless-stopped
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+
+  # ChromaDB for vector storage
+  chromadb:
+    image: chromadb/chroma:latest
+    container_name: cqa-chromadb
+    ports:
+      - "8001:8000"
+    environment:
+      - CHROMA_SERVER_HOST=0.0.0.0
+      - CHROMA_SERVER_HTTP_PORT=8000
+    volumes:
+      - chromadb-data:/chroma/chroma
+    networks:
+      - cqa-network
+    restart: unless-stopped
+
+  # Nginx reverse proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: cqa-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - cqa-app
+    networks:
+      - cqa-network
+    restart: unless-stopped
+    profiles:
+      - production
+
+  # Worker service for background analysis
+  cqa-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cqa-worker
+    environment:
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - CQA_CACHE_DIR=/app/cache
+      - CQA_LOG_LEVEL=INFO
+      - CQA_WORKER_MODE=true
+    volumes:
+      - cqa-cache:/app/cache
+      - cqa-logs:/app/logs
+      - cqa-data:/app/data
+    depends_on:
+      - redis
+      - chromadb
+    networks:
+      - cqa-network
+    restart: unless-stopped
+    command: ["cqa", "worker", "--redis-url", "redis://redis:6379"]
+    profiles:
+      - production
+
+volumes:
+  cqa-cache:
+    driver: local
+  cqa-logs:
+    driver: local
+  cqa-data:
+    driver: local
+  redis-data:
+    driver: local
+  chromadb-data:
+    driver: local
+
+networks:
+  cqa-network:
+    driver: bridge
