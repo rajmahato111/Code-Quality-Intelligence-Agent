@@ -1,21 +1,11 @@
+/// <reference types="vite/client" />
 import axios, { AxiosResponse } from 'axios'
 import toast from 'react-hot-toast'
 
 // Types matching the backend models
-export interface AnalysisStatus {
-  PENDING: 'pending'
-  RUNNING: 'running' 
-  COMPLETED: 'completed'
-  FAILED: 'failed'
-}
+export type AnalysisStatus = 'pending' | 'running' | 'completed' | 'failed'
 
-export interface SeverityLevel {
-  CRITICAL: 'critical'
-  HIGH: 'high'
-  MEDIUM: 'medium'
-  LOW: 'low'
-  INFO: 'info'
-}
+export type SeverityLevel = 'critical' | 'high' | 'medium' | 'low' | 'info'
 
 export interface AnalysisConfiguration {
   enable_security_analysis?: boolean
@@ -25,7 +15,7 @@ export interface AnalysisConfiguration {
   enable_duplication_analysis?: boolean
   enable_ai_explanations?: boolean
   enable_severity_scoring?: boolean
-  severity_threshold?: keyof SeverityLevel
+  severity_threshold?: SeverityLevel
   max_issues_per_file?: number
   timeout_seconds?: number
 }
@@ -51,7 +41,7 @@ export interface Issue {
   id: string
   category: string
   type: string
-  severity: keyof SeverityLevel
+  severity: SeverityLevel
   confidence: number
   title: string
   description: string
@@ -66,7 +56,7 @@ export interface Issue {
 
 export interface AnalysisResult {
   job_id: string
-  status: keyof AnalysisStatus
+  status: AnalysisStatus
   repository_url?: string
   branch?: string
   commit_hash?: string
@@ -76,13 +66,14 @@ export interface AnalysisResult {
   issues: Issue[]
   summary: Record<string, any>
   metrics: Record<string, any>
+  quality_score?: number  // Add quality_score field from API response
   error_message?: string
   error_details?: Record<string, any>
 }
 
 export interface AnalysisProgress {
   job_id: string
-  status: keyof AnalysisStatus
+  status: AnalysisStatus
   progress_percentage: number
   current_step: string
   steps_completed: number
@@ -197,7 +188,7 @@ export const apiService = {
   },
 
   // Jobs management
-  async listJobs(): Promise<{ jobs: Array<{ job_id: string; status: string; started_at: string; repository_url?: string }> }> {
+  async listJobs(): Promise<{ jobs: Array<{ job_id: string; status: AnalysisStatus; started_at: string; repository_url?: string }> }> {
     const response = await apiClient.get('/jobs')
     return response.data
   },

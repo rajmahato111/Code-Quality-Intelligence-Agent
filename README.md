@@ -466,6 +466,12 @@ The user interaction flow follows these key paths:
    - Quality score visualization and trend tracking
    - Export capabilities for different formats
 
+### System Sequence Diagram
+
+![System Sequence](diagrams/System%20Sequence.svg)
+
+This end-to-end sequence shows a single analysis run: User triggers the CLI, the Orchestrator discovers files, the Parser builds multi-language ASTs, analyzers run across categories, the LLM service generates explanations and fix suggestions, and the Report Generator returns prioritized results to the CLI. Notes highlight cache behavior (`--no-cache`), analyzer initialization, total issues, and severity scoring.
+
 ### Core Components
 
 1. **Analysis Orchestrator**: Central coordination engine that manages the analysis workflow, handles parallel processing, and coordinates between different analyzers.

@@ -1,0 +1,31 @@
+# Configuration file with potential security issues
+
+database:
+  host: localhost
+  port: 5432
+  username: admin
+  password: "admin123"  # Hardcoded password
+  database: myapp
+
+api:
+  secret_key: "super_secret_key_123"  # Hardcoded secret
+  jwt_secret: "jwt_secret_456"
+  rate_limit: 1000
+  timeout: 30
+
+external_services:
+  email:
+    api_key: "email_api_key_789"  # Hardcoded API key
+    sender: "noreply@example.com"
+  
+  payment:
+    api_key: "payment_api_key_abc"  # Hardcoded API key
+    webhook_secret: "webhook_secret_def"
+
+logging:
+  level: DEBUG  # Debug level in production
+  file: "/var/log/app.log"
+  
+security:
+  encryption_key: "encryption_key_123"  # Hardcoded encryption key
+  salt: "fixed_salt_456"  # Fixed salt for hashing

@@ -66,22 +66,16 @@ const MetricsOverview: React.FC<MetricsOverviewProps> = ({ result }) => {
   }
 
   const getOverallScore = () => {
-    if (result.metrics?.overall_score) {
-      return Math.round(result.metrics.overall_score * 100)
+    // Use the exact same scoring as CLI - no fallback, no multiplication
+    // Check both possible data structures from API
+    if (result.metrics?.overall_score !== undefined) {
+      return Math.round(result.metrics.overall_score)
     }
-    // Calculate a simple score based on issue severity
-    const totalIssues = result.issues.length
-    if (totalIssues === 0) return 100
-    
-    const criticalWeight = (severityCounts.critical || 0) * 4
-    const highWeight = (severityCounts.high || 0) * 3
-    const mediumWeight = (severityCounts.medium || 0) * 2
-    const lowWeight = (severityCounts.low || 0) * 1
-    
-    const weightedScore = criticalWeight + highWeight + mediumWeight + lowWeight
-    const maxPossibleScore = totalIssues * 4
-    
-    return Math.max(0, Math.round(100 - (weightedScore / maxPossibleScore) * 100))
+    if (result.quality_score !== undefined) {
+      return Math.round(result.quality_score)
+    }
+    // If no score available, return 0 (same as CLI behavior)
+    return 0
   }
 
   const overallScore = getOverallScore()

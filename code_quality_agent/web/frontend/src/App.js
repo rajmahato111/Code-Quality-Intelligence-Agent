@@ -626,7 +626,12 @@ function App() {
         command = `cd "/Users/rajkumarmahto/Atlan Kiro" && python3 -m code_quality_agent.cli.main analyze --github "${repoUrl}" --output-format json --no-cache`;
       } else {
         // For local paths, use the actual input path
-        command = `cd "/Users/rajkumarmahto/Atlan Kiro" && python3 -m code_quality_agent.cli.main analyze "${localPath.trim()}" --output-format json --no-cache`;
+        let pathToAnalyze = localPath.trim();
+        // Ensure the path starts with / if it's a relative path
+        if (!pathToAnalyze.startsWith('/')) {
+          pathToAnalyze = `/${pathToAnalyze}`;
+        }
+        command = `cd "/Users/rajkumarmahto/Atlan Kiro" && python3 -m code_quality_agent.cli.main analyze "${pathToAnalyze}" --output-format json --no-cache`;
       }
       
       // Call CLI endpoint
@@ -664,15 +669,10 @@ function App() {
         // Calculate realistic quality score based on issues
         let qualityScore = cliResult.quality_score;
         
+        // Use the exact score from CLI - no fallback calculation
+        // This ensures consistency between CLI and Web UI
         if (qualityScore === 0 || !qualityScore) {
-          // Calculate score based on issue severity and count
-          const totalIssues = issues.length;
-          const highPenalty = highIssues * 3;    // High issues: -3 points each
-          const mediumPenalty = mediumIssues * 2; // Medium issues: -2 points each  
-          const lowPenalty = lowIssues * 0.5;    // Low issues: -0.5 points each
-          
-          const totalPenalty = highPenalty + mediumPenalty + lowPenalty;
-          qualityScore = Math.max(5, 100 - totalPenalty); // Minimum score of 5
+          qualityScore = 0; // Keep the CLI score of 0
         }
         
         setAnalysis({
