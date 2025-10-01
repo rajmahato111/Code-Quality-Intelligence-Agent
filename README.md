@@ -1,6 +1,25 @@
 # Code Quality Intelligence Agent
 
+> **GitHub Repository**: [https://github.com/rajmahato111/Code-Quality-Intelligence-Agent.git](https://github.com/rajmahato111/Code-Quality-Intelligence-Agent.git)
+
 An AI-powered tool that analyzes code repositories to generate actionable, developer-friendly reports. It goes beyond simple linting by understanding code structure, detecting real issues across multiple categories, and providing practical insights through both comprehensive reports and interactive Q&A capabilities.
+
+## 🎯 For First-Time Users
+
+**Want to test this immediately?** After cloning and installing (see Quick Start below), try:
+
+```bash
+# 1. Test with a single file (30 seconds)
+python3 -m code_quality_agent.cli.main analyze test_qa/performance_issues.py
+
+# 2. Try the interactive Q&A (ask questions about your code)
+python3 -m code_quality_agent.cli.main qa test_qa/
+
+# 3. Analyze any GitHub repo
+python3 -m code_quality_agent.cli.main analyze --github https://github.com/programiz/Calculator --no-cache
+```
+
+**Web Interface (optional)**: For a visual UI experience, see the [Try It Out](#-try-it-out---quick-test-commands) section.
 
 ## 🚀 Quick Start
 
@@ -8,15 +27,18 @@ For a complete setup guide, see [SETUP.md](SETUP.md).
 
 ```bash
 # Clone and setup
-git clone <your-repo-url>
-cd code-quality-agent
+git clone https://github.com/rajmahato111/Code-Quality-Intelligence-Agent.git
+cd Code-Quality-Intelligence-Agent
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 pip install -e .
 
+# Set your API key (required for AI features)
+export OPENAI_API_KEY="your-key-here"
+
 # Run analysis
-python3 -m code_quality_agent.cli.main analyze examples/simple_module.py
+python3 -m code_quality_agent.cli.main analyze test_qa/performance_issues.py
 
 # Start web interface
 python3 -m code_quality_agent.web.api  # Backend on :8000
@@ -39,6 +61,7 @@ cd code_quality_agent/web/frontend && npm run dev  # Frontend on :3001
 - [Quick Start](#-quick-start)
 - [Features](#-features)
 - [Setup Guide](#-setup-guide)
+- [Try It Out - Quick Test Commands](#-try-it-out---quick-test-commands)
 - [Usage](#-usage)
 - [Web Interface](#-web-interface)
 - [Configuration](#-configuration)
@@ -61,8 +84,8 @@ For detailed installation and setup instructions, see [SETUP.md](SETUP.md).
 
 ```bash
 # Clone repository
-git clone <your-repo-url>
-cd code-quality-agent
+git clone https://github.com/rajmahato111/Code-Quality-Intelligence-Agent.git
+cd Code-Quality-Intelligence-Agent
 
 # Create virtual environment
 python3 -m venv venv
@@ -72,13 +95,77 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install -r requirements.txt
 pip install -e .
 
-# Install web interface dependencies
+# Set your API key
+export OPENAI_API_KEY="your-key-here"  # On Windows: set OPENAI_API_KEY=your-key-here
+
+# Install web interface dependencies (optional)
 cd code_quality_agent/web/frontend
 npm install
 cd ../../..
 ```
 
-## 🚀 Quick Start
+## 🧪 Try It Out - Quick Test Commands
+
+After installation, test the agent with these ready-to-use examples:
+
+### 1. Analyze a Single File
+```bash
+# Analyze performance issues in a sample file
+python3 -m code_quality_agent.cli.main analyze test_qa/performance_issues.py
+```
+
+### 2. Analyze a Project Directory
+```bash
+# Analyze the test project
+python3 -m code_quality_agent.cli.main analyze test_project --explanations --no-cache
+```
+
+### 3. Analyze a Public GitHub Repository
+```bash
+# Analyze the Calculator demo repository
+python3 -m code_quality_agent.cli.main analyze --github https://github.com/programiz/Calculator --no-cache
+```
+
+### 4. Interactive Q&A Mode
+```bash
+# Start Q&A session with analyzed codebase
+python3 -m code_quality_agent.cli.main qa test_qa/
+
+# Try these questions:
+# - What security issues were found?
+# - Show me the most complex functions?
+# - How can I improve find_duplicates performance?
+# - Show a before/after diff for improving find_duplicates with comments
+```
+
+### 5. Generate Visual Reports
+```bash
+# Create an interactive HTML dashboard
+python3 -m code_quality_agent.cli.main visualize metrics test_visualization/ --output metrics_dashboard.html
+```
+
+### 6. Web Interface Testing
+
+**Option A: Upload Files**
+1. Start the web interface (see Web Interface section below)
+2. Navigate to `http://localhost:3001`
+3. Upload test files from `test_qa/` or `test_project/`
+
+**Option B: GitHub Repository**
+1. Enter this URL in the web interface: `https://github.com/programiz/Calculator`
+2. Click "Start Analysis"
+3. View results and try the Q&A chat
+
+**Option C: Local Path Analysis**
+1. Find your installation path: `pwd` (in your project directory)
+2. Enter the full path in the format: `/Users/YOUR_USERNAME/Code-Quality-Intelligence-Agent/test_qa`
+3. Example: If you cloned to `/Users/john/Code-Quality-Intelligence-Agent`, enter:
+   ```
+   /Users/john/Code-Quality-Intelligence-Agent/test_qa
+   ```
+4. Click "Start Analysis"
+
+## 🚀 Usage
 
 ### Basic Analysis
 
