@@ -40,7 +40,7 @@ class AnalysisConfiguration(BaseModel):
 class RepositoryRequest(BaseModel):
     """Request to analyze a repository."""
     url: HttpUrl = Field(..., description="GitHub/GitLab repository URL")
-    branch: Optional[str] = Field("main", description="Branch to analyze")
+    branch: Optional[str] = Field(None, description="Branch to analyze (auto-detects default if not specified)")
     include_patterns: Optional[List[str]] = Field(None, description="File patterns to include")
     exclude_patterns: Optional[List[str]] = Field(None, description="File patterns to exclude")
     analysis_types: Optional[List[str]] = Field(None, description="Types of analysis to perform")
@@ -112,6 +112,23 @@ class AnalysisResult(BaseModel):
     error_message: Optional[str] = Field(None, description="Error message if failed")
     error_details: Optional[Dict[str, Any]] = Field(None, description="Detailed error information")
 
+    @field_validator('metrics', mode='before')
+    @classmethod
+    def _normalize_metrics(cls, v):
+        if v is None:
+            return {}
+        try:
+            if isinstance(v, dict):
+                return v
+            if hasattr(v, 'to_dict') and callable(getattr(v, 'to_dict')):
+                return v.to_dict()
+            if hasattr(v, 'model_dump') and callable(getattr(v, 'model_dump')):
+                return v.model_dump()
+            # Best-effort conversion
+            return dict(getattr(v, '__dict__', {}))
+        except Exception:
+            return {}
+
 
 class QuestionRequest(BaseModel):
     """Request for Q&A about analysis results."""
@@ -126,7 +143,7 @@ class Answer(BaseModel):
     """Answer to a question about code quality."""
     question: str = Field(..., description="Original question")
     answer: str = Field(..., description="AI-generated answer")
-    confidence: float = Field(..., ge=0.0, le=1.0, description="Confidence in the answer")
+    confidence: Optional[float] = Field(None, ge=0.0, le=1.0, description="Confidence in the answer")
     sources: Optional[List[str]] = Field(None, description="Source references")
     related_issues: Optional[List[str]] = Field(None, description="Related issue IDs")
     suggestions: Optional[List[str]] = Field(None, description="Additional suggestions")

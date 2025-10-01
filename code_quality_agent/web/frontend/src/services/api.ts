@@ -96,7 +96,7 @@ export interface QuestionRequest {
 export interface Answer {
   question: string
   answer: string
-  confidence: number
+  confidence?: number | null
   sources?: string[]
   related_issues?: string[]
   suggestions?: string[]

@@ -580,6 +580,7 @@ function App() {
   const [chatMessages, setChatMessages] = useState([]);
   const [chatInput, setChatInput] = useState('');
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [currentJobId, setCurrentJobId] = useState(null); // Store job_id for Q&A
 
   const readFileAsText = (file) => {
     return new Promise((resolve, reject) => {
@@ -607,50 +608,251 @@ function App() {
     setIsAnalyzing(true);
     setAnalysis(null);
     setError(null);
+    setCurrentJobId(null); // Reset job ID
     
     try {
-      // Use CLI endpoint for analysis
-      let command = '';
-      let files = [];
+      let cliResult;
       
       if (inputType === 'upload' && selectedFiles.length > 0) {
-        // For file uploads, analyze the test_documentation directory as an example
-        command = 'cd "/Users/rajkumarmahto/Atlan Kiro" && python3 -m code_quality_agent.cli.main analyze test_documentation --output-format json --no-cache';
-        files = selectedFiles.map(f => f.name);
+        // NEW: Use /analyze/files endpoint for uploads
+        console.log('📤 Uploading files for analysis...');
+        
+        // Read file contents
+        const fileContents = {};
+        const fileNames = [];
+        for (const file of selectedFiles) {
+          try {
+            console.log('Reading file:', file.name, 'Type:', typeof file, 'Is File:', file instanceof File);
+            const content = await readFileAsText(file);
+            fileContents[file.name] = content;
+            fileNames.push(file.name);
+            console.log('✓ Read', file.name, ':', content.length, 'bytes');
+          } catch (err) {
+            console.error('Failed to read file:', file.name, err);
+            throw new Error(`Failed to read file ${file.name}: ${err.message}`);
+          }
+        }
+        
+        // Get API key first
+        const apiKeyResponse = await fetch('http://127.0.0.1:8000/demo/api-key');
+        const { api_key } = await apiKeyResponse.json();
+        
+        // Call /analyze/files endpoint
+        const analyzeResponse = await fetch('http://127.0.0.1:8000/analyze/files', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${api_key}`
+          },
+          body: JSON.stringify({
+            request: {
+              files: fileNames,
+              content: fileContents,
+              analysis_types: ['security', 'performance', 'complexity', 'duplication', 'testing', 'documentation']
+            },
+            config: {
+              enable_ai_explanations: false,
+              enable_severity_scoring: false
+            }
+          })
+        });
+        
+        if (!analyzeResponse.ok) {
+          const errorData = await analyzeResponse.json();
+          throw new Error(errorData.message || 'Analysis failed');
+        }
+        
+        const { job_id } = await analyzeResponse.json();
+        console.log('✓ Job created:', job_id);
+        setCurrentJobId(job_id); // Store job ID for Q&A
+        
+        // Poll for results
+        let attempts = 0;
+        while (attempts < 60) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          const statusResponse = await fetch(`http://127.0.0.1:8000/analyze/${job_id}`, {
+            headers: { 'Authorization': `Bearer ${api_key}` }
+          });
+          
+          const statusData = await statusResponse.json();
+          console.log('Poll attempt', attempts, '- Status:', statusData.status);
+          
+          if (statusData.status === 'completed') {
+            // statusData IS the AnalysisResult (issues at top level)
+            // Use smart priority: skip overall_score if it's 0, use maintainability_index instead
+            let qualityScore = 0;
+            if (statusData.metrics?.overall_score && statusData.metrics.overall_score > 0) {
+              qualityScore = statusData.metrics.overall_score;
+            } else if (statusData.metrics?.maintainability_index) {
+              qualityScore = statusData.metrics.maintainability_index;
+            } else {
+              qualityScore = Math.max(0, 100 - (statusData.issues?.length || 0) * 2);
+            }
+            
+            cliResult = {
+              issues: statusData.issues || [],
+              quality_score: qualityScore
+            };
+            console.log('✓ Analysis completed:', cliResult.issues.length, 'issues, score:', qualityScore);
+            break;
+          } else if (statusData.status === 'failed') {
+            throw new Error(statusData.error_message || 'Analysis failed');
+          }
+          
+          attempts++;
+        }
+        
+        if (attempts >= 60) {
+          throw new Error('Analysis timed out');
+        }
+        
       } else if (inputType === 'github' && githubUrl.trim()) {
-        // For GitHub repositories - use the --github option
+        // For GitHub repositories - use /analyze/repository endpoint
+        console.log('📤 Analyzing GitHub repository...');
         let repoUrl = githubUrl.trim();
         if (!repoUrl.startsWith('http')) {
           repoUrl = `https://github.com/${repoUrl}`;
         }
-        command = `cd "/Users/rajkumarmahto/Atlan Kiro" && python3 -m code_quality_agent.cli.main analyze --github "${repoUrl}" --output-format json --no-cache`;
-      } else {
-        // For local paths, use the actual input path
-        let pathToAnalyze = localPath.trim();
-        // Ensure the path starts with / if it's a relative path
-        if (!pathToAnalyze.startsWith('/')) {
-          pathToAnalyze = `/${pathToAnalyze}`;
+        
+        // Get API key
+        const apiKeyResponse = await fetch('http://127.0.0.1:8000/demo/api-key');
+        const { api_key } = await apiKeyResponse.json();
+        
+        // Start repository analysis (let backend auto-detect default branch)
+        const analyzeResponse = await fetch('http://127.0.0.1:8000/analyze/repository', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${api_key}`
+          },
+          body: JSON.stringify({
+            url: repoUrl,
+            branch: null,  // Let backend auto-detect (will try main, master, etc.)
+            config: {
+              enable_ai_explanations: false,
+              enable_severity_scoring: false
+            }
+          })
+        });
+        
+        if (!analyzeResponse.ok) {
+          const errorData = await analyzeResponse.json();
+          throw new Error(errorData.message || 'Repository analysis failed');
         }
-        command = `cd "/Users/rajkumarmahto/Atlan Kiro" && python3 -m code_quality_agent.cli.main analyze "${pathToAnalyze}" --output-format json --no-cache`;
+        
+        const { job_id } = await analyzeResponse.json();
+        console.log('✓ Job created:', job_id);
+        setCurrentJobId(job_id); // Store job ID for Q&A
+        
+        // Poll for results
+        let attempts = 0;
+        while (attempts < 120) { // Longer timeout for GitHub repos
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Check every 2 seconds
+          
+          const statusResponse = await fetch(`http://127.0.0.1:8000/analyze/${job_id}`, {
+            headers: { 'Authorization': `Bearer ${api_key}` }
+          });
+          
+          const statusData = await statusResponse.json();
+          console.log('Poll attempt', attempts, '- Status:', statusData.status);
+          
+          if (statusData.status === 'completed') {
+            // Use smart priority: skip overall_score if it's 0, use maintainability_index instead
+            let qualityScore = 0;
+            if (statusData.metrics?.overall_score && statusData.metrics.overall_score > 0) {
+              qualityScore = statusData.metrics.overall_score;
+            } else if (statusData.metrics?.maintainability_index) {
+              qualityScore = statusData.metrics.maintainability_index;
+            } else {
+              qualityScore = Math.max(0, 100 - (statusData.issues?.length || 0) * 2);
+            }
+            
+            cliResult = {
+              issues: statusData.issues || [],
+              quality_score: qualityScore
+            };
+            console.log('✓ Analysis completed:', cliResult.issues.length, 'issues, score:', qualityScore);
+            break;
+          } else if (statusData.status === 'failed') {
+            throw new Error(statusData.error_message || 'Analysis failed');
+          }
+          
+          attempts++;
+        }
+        
+        if (attempts >= 120) {
+          throw new Error('Analysis timed out');
+        }
+        
+      } else {
+        // For local paths - use /analyze/path endpoint
+        console.log('📤 Analyzing local path...');
+        let path = localPath.trim();
+        
+        // Get API key
+        const apiKeyResponse = await fetch('http://127.0.0.1:8000/demo/api-key');
+        const { api_key } = await apiKeyResponse.json();
+        
+        // Start path analysis
+        const analyzeResponse = await fetch('http://127.0.0.1:8000/analyze/path', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${api_key}`
+          },
+          body: JSON.stringify({ path: path })
+        });
+        
+        if (!analyzeResponse.ok) {
+          const errorData = await analyzeResponse.json();
+          throw new Error(errorData.message || 'Path analysis failed');
+        }
+        
+        const { job_id } = await analyzeResponse.json();
+        console.log('✓ Job created:', job_id);
+        setCurrentJobId(job_id); // Store job ID for Q&A
+        
+        // Poll for results
+        let attempts = 0;
+        while (attempts < 60) {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          
+          const statusResponse = await fetch(`http://127.0.0.1:8000/analyze/${job_id}`, {
+            headers: { 'Authorization': `Bearer ${api_key}` }
+          });
+          
+          const statusData = await statusResponse.json();
+          console.log('Poll attempt', attempts, '- Status:', statusData.status);
+          
+          if (statusData.status === 'completed') {
+            // Use smart priority: skip overall_score if it's 0, use maintainability_index instead
+            let qualityScore = 0;
+            if (statusData.metrics?.overall_score && statusData.metrics.overall_score > 0) {
+              qualityScore = statusData.metrics.overall_score;
+            } else if (statusData.metrics?.maintainability_index) {
+              qualityScore = statusData.metrics.maintainability_index;
+            } else {
+              qualityScore = Math.max(0, 100 - (statusData.issues?.length || 0) * 2);
+            }
+            
+            cliResult = {
+              issues: statusData.issues || [],
+              quality_score: qualityScore
+            };
+            console.log('✓ Analysis completed:', cliResult.issues.length, 'issues, score:', qualityScore);
+            break;
+          } else if (statusData.status === 'failed') {
+            throw new Error(statusData.error_message || 'Analysis failed');
+          }
+          
+          attempts++;
+        }
+        
+        if (attempts >= 60) {
+          throw new Error('Analysis timed out');
+        }
       }
-      
-      // Call CLI endpoint
-      const cliResponse = await fetch('http://127.0.0.1:8000/run-cli', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json'
-        },
-        body: JSON.stringify({
-          command: command,
-          files: files
-        })
-      });
-      
-      if (!cliResponse.ok) {
-        throw new Error('CLI analysis failed');
-      }
-      
-      const cliResult = await cliResponse.json();
       
       // Process CLI results
       const issues = cliResult.issues || [];
@@ -740,7 +942,7 @@ function App() {
       console.log('Chat: Analysis data available:', !!analysis);
       console.log('Chat: Analysis details count:', analysis?.details?.length || 0);
       
-      // Send question to backend
+      // Send question to backend with job_id
       const response = await fetch('http://127.0.0.1:8000/qa/ask', {
         method: 'POST',
         headers: {
@@ -749,34 +951,7 @@ function App() {
         },
         body: JSON.stringify({
           question: userMessage,
-          context: {
-            analysis_result: {
-              analysis_id: `analysis-${Date.now()}`,
-              codebase_path: analysis.path,
-              parsed_files: analysis.details ? analysis.details.map(detail => ({
-                file_path: detail.file,
-                language: detail.file.endsWith('.py') ? 'python' : 'javascript'
-              })) : [],
-              issues: analysis.details ? analysis.details.map(detail => ({
-                id: `issue-${Math.random()}`,
-                title: detail.message,
-                description: detail.message,
-                severity: detail.severity.toLowerCase(),
-                category: detail.type.toLowerCase(),
-                location: {
-                  file_path: detail.file,
-                  line_number: detail.line
-                },
-                suggestions: [detail.suggestion]
-              })) : [],
-              metrics: {
-                overall_score: analysis.qualityScore,
-                complexity_score: analysis.qualityScore,
-                maintainability_score: analysis.qualityScore,
-                security_score: analysis.qualityScore
-              }
-            }
-          }
+          job_id: currentJobId || undefined  // Use the stored job_id from analysis
         })
       });
       
@@ -815,44 +990,65 @@ function App() {
   const formatChatMessage = (message) => {
     if (!message) return message;
     
-    // Format file paths with styling
-    let formatted = message.replace(
-      /([\/\w\-\.]+\.(py|js|ts|jsx|tsx|java|cpp|c|h|go|rs|php|rb|swift|kt|scala|sh|yaml|yml|json|xml|html|css|md|txt)):(\d+)/g,
-      '<span class="file-path">$1:$3</span>'
-    );
+    let formatted = message;
     
-    // Format severity badges
+    // Format code blocks (triple backticks)
     formatted = formatted.replace(
-      /(\w+)\s*\|\s*(high|medium|low)/gi,
-      '<span class="category-badge">$1</span><span class="severity-badge $2">$2</span>'
+      /```(\w+)?\n([\s\S]*?)```/g,
+      '<pre><code>$2</code></pre>'
     );
     
-    // Format code snippets
+    // Format bold text
+    formatted = formatted.replace(
+      /\*\*([^\*]+)\*\*/g,
+      '<strong>$1</strong>'
+    );
+    
+    // Format italic text
+    formatted = formatted.replace(
+      /\*([^\*]+)\*/g,
+      '<em>$1</em>'
+    );
+    
+    // Format file paths with styling
+    formatted = formatted.replace(
+      /([\/\w\-\.]+\.(py|js|ts|jsx|tsx|java|cpp|c|h|go|rs|php|rb|swift|kt|scala|sh|yaml|yml|json|xml|html|css|md|txt)):(\d+)/g,
+      '<span style="background:#2d2d2d;color:#6c9ef8;padding:2px 6px;border-radius:3px;font-family:monospace;font-size:0.9em">$1:$3</span>'
+    );
+    
+    // Format inline code
     formatted = formatted.replace(
       /`([^`]+)`/g,
-      '<code>$1</code>'
+      '<code style="background:#f4f4f4;padding:2px 6px;border-radius:3px;font-family:monospace;color:#d73a49">$1</code>'
     );
     
-    // Format function names and class names
+    // Format numbered lists (1. 2. 3. etc.)
     formatted = formatted.replace(
-      /'([a-zA-Z_][a-zA-Z0-9_]*)'/g,
-      '<code>$1</code>'
+      /^\s*(\d+)\.\s+(.+)$/gm,
+      '<li><strong>$1.</strong> $2</li>'
     );
     
     // Format bullet points
     formatted = formatted.replace(
-      /^- (.+)$/gm,
+      /^\s*[-•]\s+(.+)$/gm,
       '<li>$1</li>'
     );
     
-    // Wrap consecutive list items in ul
+    // Wrap consecutive list items in ul/ol
     formatted = formatted.replace(
-      /(<li>.*<\/li>)/gs,
-      '<ul>$1</ul>'
+      /(<li>.*?<\/li>\s*)+/gs,
+      (match) => `<ul style="margin:10px 0;padding-left:20px">${match}</ul>`
     );
     
-    // Clean up nested ul tags
-    formatted = formatted.replace(/<\/ul>\s*<ul>/g, '');
+    // Format section headers (### or **)
+    formatted = formatted.replace(
+      /###\s+(.+)/g,
+      '<h4 style="margin-top:15px;margin-bottom:8px;color:#2c3e50">$1</h4>'
+    );
+    
+    // Preserve line breaks
+    formatted = formatted.replace(/\n\n/g, '<br><br>');
+    formatted = formatted.replace(/\n/g, '<br>');
     
     return formatted;
   };

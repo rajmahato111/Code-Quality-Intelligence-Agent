@@ -31,12 +31,15 @@ from .auth import (
 # Import the core analysis components
 from ..core.orchestrator import AnalysisOrchestrator
 from ..rag.qa_engine import QAEngine
+from ..rag.qa_engine import create_qa_engine
 from ..scoring.scoring_engine import ScoringEngine, ScoringConfiguration
 from .github_integration import GitHubIntegration, get_repository_integration
 from .git_platform_integration import (
     WebhookHandler, PullRequestAnalyzer, get_platform_integration,
     WebhookEvent, PullRequestInfo
 )
+from ..core.models import AnalysisOptions
+from ..core.models import AnalysisResult as CoreAnalysisResult, ParsedFile as CoreParsedFile, Issue as CoreIssue, CodeLocation as CoreCodeLocation, IssueCategory as CoreIssueCategory, Severity as CoreSeverity
 
 logger = logging.getLogger(__name__)
 
@@ -435,6 +438,151 @@ async def create_session(response: Response, user_id: Optional[str] = None):
 
 
 # Analysis endpoints
+@app.post("/analyze/path", response_model=Dict[str, str], tags=["Analysis"])
+async def analyze_local_path(
+    request: Dict[str, Any],
+    background_tasks: BackgroundTasks,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Analyze a local file path."""
+    await check_rate_limit_async(current_user)
+    
+    job_id = str(uuid.uuid4())
+    path = request.get("path")
+    
+    if not path:
+        raise HTTPException(status_code=400, detail="Path is required")
+    
+    # Initialize job
+    analysis_jobs[job_id] = {
+        "id": job_id,
+        "status": AnalysisStatus.PENDING,
+        "user_id": current_user.get("user_id"),
+        "started_at": datetime.utcnow(),
+        "progress": 0.0,
+        "current_step": "Initializing",
+        "result": None
+    }
+    
+    # Run analysis in background
+    background_tasks.add_task(run_path_analysis, job_id, path)
+    
+    return {"job_id": job_id, "status": "started"}
+
+
+async def run_path_analysis(job_id: str, path: str):
+    """Run analysis on a local path in background."""
+    job = analysis_jobs[job_id]
+    
+    try:
+        # Validate path exists
+        import os
+        if not os.path.exists(path):
+            raise ValueError(f"Path does not exist: {path}")
+        if not os.path.isdir(path):
+            raise ValueError(f"Path is not a directory: {path}")
+        
+        job["status"] = AnalysisStatus.RUNNING
+        job["current_step"] = "Analyzing local path"
+        job["progress"] = 30.0
+        
+        # Use orchestrator to analyze the path
+        if orchestrator:
+            logger.info(f"Analyzing local path: {path}")
+            
+            analysis_options = AnalysisOptions(
+                include_patterns=["*.py", "*.js", "*.ts", "*.jsx", "*.tsx"],
+                exclude_patterns=["node_modules", "__pycache__", ".git", "venv", "env"],
+                categories=None  # All categories
+            )
+            
+            analysis_result = orchestrator.analyze_codebase(
+                path=path,
+                options=analysis_options
+            )
+            
+            logger.info(f"Path analysis completed: {len(analysis_result.issues)} issues found")
+            
+            # Convert to web format
+            web_issues = []
+            for core_issue in analysis_result.issues:
+                try:
+                    # Extract enum value name
+                    severity_str = str(core_issue.severity.value).lower()
+                    if '.' in severity_str:
+                        severity_str = severity_str.split('.')[-1]
+                    
+                    category_str = str(core_issue.category.value).lower()
+                    if '.' in category_str:
+                        category_str = category_str.split('.')[-1]
+                    
+                    web_issue = Issue(
+                        id=core_issue.id,
+                        category=category_str,
+                        type=category_str,
+                        severity=severity_str,
+                        confidence=core_issue.confidence,
+                        title=core_issue.title,
+                        description=core_issue.description,
+                        location=IssueLocation(
+                            file_path=core_issue.location.file_path,
+                            line_number=core_issue.location.line_start,
+                            column_number=core_issue.location.column_start,
+                            function_name=core_issue.metadata.get('function_name'),
+                            class_name=core_issue.metadata.get('class_name')
+                        ),
+                        suggestions=[core_issue.suggestion] if core_issue.suggestion else None
+                    )
+                    web_issues.append(web_issue)
+                except Exception as e:
+                    logger.error(f"Failed to convert issue: {e}")
+                    continue
+            
+            # Get metrics
+            raw_metrics = {}
+            if hasattr(analysis_result, 'metrics') and analysis_result.metrics:
+                m = analysis_result.metrics
+                try:
+                    if hasattr(m, 'to_dict') and callable(getattr(m, 'to_dict')):
+                        raw_metrics = m.to_dict()
+                    elif hasattr(m, 'model_dump') and callable(getattr(m, 'model_dump')):
+                        raw_metrics = m.model_dump()
+                    elif isinstance(m, dict):
+                        raw_metrics = m
+                    else:
+                        raw_metrics = dict(m.__dict__)
+                except Exception:
+                    raw_metrics = {}
+            
+            result = AnalysisResult(
+                job_id=job_id,
+                status=AnalysisStatus.COMPLETED,
+                started_at=job["started_at"],
+                completed_at=datetime.utcnow(),
+                duration_seconds=(datetime.utcnow() - job["started_at"]).total_seconds(),
+                codebase_path=path,
+                issues=web_issues,
+                summary={
+                    "files_analyzed": len(analysis_result.parsed_files),
+                    "total_issues": len(web_issues)
+                },
+                metrics=raw_metrics
+            )
+            
+            job["result"] = result
+            job["status"] = AnalysisStatus.COMPLETED
+            job["progress"] = 100.0
+            job["current_step"] = "Completed"
+            
+        else:
+            raise Exception("Orchestrator not available")
+            
+    except Exception as e:
+        logger.error(f"Path analysis failed: {e}")
+        job["status"] = AnalysisStatus.FAILED
+        job["error"] = str(e)
+
+
 @app.post("/analyze/repository", response_model=AnalysisResult, tags=["Analysis"])
 async def analyze_repository(
     request: RepositoryRequest,
@@ -566,19 +714,46 @@ async def ask_question(
     """Ask a question about code quality."""
     await check_rate_limit_async(current_user)
     
+    # Lazy-init QA engine if not available
+    global qa_engine
     if not qa_engine:
-        raise HTTPException(
-            status_code=503, 
-            detail="Q&A service is currently unavailable. Please check service configuration."
-        )
+        try:
+            from ..rag.vector_store import VectorStoreManager
+            from ..llm.llm_service import create_llm_service
+            import os
+            vector_store = VectorStoreManager()
+            openai_key = os.getenv("OPENAI_API_KEY")
+            provider = "openai" if openai_key else "mock"
+            llm_service = create_llm_service(provider=provider, api_key=openai_key)  # type: ignore
+            qa_engine = create_qa_engine(vector_store, llm_service)  # type: ignore
+            logger.info("QA engine lazily initialized in /qa/ask handler")
+        except Exception as init_e:
+            logger.error(f"Failed to initialize QA engine: {init_e}")
+            raise HTTPException(status_code=503, detail="Q&A service is currently unavailable.")
     
     try:
         # Get context from analysis job if provided
         context = {}
+        logger.info(f"📥 Q&A Request: job_id={request.job_id}, question={request.question[:50]}...")
+        
         if request.job_id and request.job_id in analysis_jobs:
             job = analysis_jobs[request.job_id]
+            logger.info(f"✓ Found job {request.job_id}, has result: {job.get('result') is not None}")
             if job.get("result"):
                 context["analysis_result"] = job["result"]
+                # Log issue count and details
+                ar = job["result"]
+                if isinstance(ar, dict):
+                    issue_count = len(ar.get("issues", []))
+                    metrics = ar.get("metrics", {})
+                    overall_score = metrics.get("overall_score") if isinstance(metrics, dict) else getattr(metrics, "overall_score", None)
+                else:
+                    issue_count = len(getattr(ar, "issues", []))
+                    metrics = getattr(ar, "metrics", {})
+                    overall_score = metrics.get("overall_score") if isinstance(metrics, dict) else getattr(metrics, "overall_score", None)
+                logger.info(f"✓ Analysis result: {issue_count} issues, score={overall_score}, type={type(ar).__name__}")
+        else:
+            logger.warning(f"❌ Job ID {request.job_id} not found in analysis_jobs. Available jobs: {list(analysis_jobs.keys())[:5]}")
         
         # Add any additional context
         if request.context:
@@ -600,154 +775,266 @@ async def ask_question(
                 issues = ctx.get("issues") or []
             return issues or []
 
-        issues_list = _extract_issues(context)
-        if issues_list:
-            # Intent detection to scope answer
-            q_lower = (request.question or "").lower()
-            def match_issue(issue_dict: Dict[str, Any]) -> bool:
-                sev = str(issue_dict.get("severity", "")).lower()
-                cat = str(issue_dict.get("category", "")).lower()
-                title = str(issue_dict.get("title", "")).lower()
-                desc = str(issue_dict.get("description", "")).lower()
-                text = f"{title} {desc}"
-                # Category filters
-                if any(k in q_lower for k in ["security", "vulnerability", "injection", "auth", "secrets"]):
-                    if cat != "security":
-                        return False
-                if any(k in q_lower for k in ["performance", "slow", "optimiz", "latency", "memory"]):
-                    if cat != "performance":
-                        return False
-                if any(k in q_lower for k in ["duplicate", "duplication", "copy-paste"]):
-                    if cat != "duplication":
-                        return False
-                if any(k in q_lower for k in ["complexity", "cognitive", "cyclomatic"]):
-                    if cat != "complexity":
-                        return False
-                if any(k in q_lower for k in ["test", "coverage", "unit test", "integration test"]):
-                    if cat != "testing":
-                        return False
-                if any(k in q_lower for k in ["doc", "documentation", "docstring", "comment"]):
-                    if cat != "documentation":
-                        return False
-                # Severity filter
-                if any(k in q_lower for k in ["critical", "high severity", "only high", "high"]):
-                    return sev in ["critical", "high"]
-                if any(k in q_lower for k in ["medium severity", "medium"]):
-                    return sev == "medium"
-                if any(k in q_lower for k in ["low severity", "low"]):
-                    return sev == "low"
-                return True
-            filtered_issues = [i if isinstance(i, dict) else i.model_dump() for i in issues_list]
-            filtered_issues = [i for i in filtered_issues if match_issue(i)]
-            # If asking for fixes/solutions, prioritize issues that include suggestions
-            wants_fixes = any(k in q_lower for k in ["fix", "solution", "how to resolve", "resolve", "remedy"])
-            if wants_fixes:
-                filtered_issues.sort(key=lambda x: 0 if (x.get("suggestions") and len(x.get("suggestions", [])) > 0) else 1)
-            # Limit to concise subset
-            max_examples = 2
-            is_specific_intent = any(k in q_lower for k in [
-                "security", "vulnerability", "injection", "auth", "secrets",
-                "performance", "slow", "optimiz", "latency", "memory",
-                "duplicate", "duplication", "copy-paste",
-                "complexity", "cognitive", "cyclomatic",
-                "test", "coverage", "unit test", "integration test",
-                "doc", "documentation", "docstring", "comment",
-                "fix", "solution"
-            ])
-            total = len(filtered_issues) if filtered_issues else len(issues_list)
-            by_sev: Dict[str, int] = {"critical": 0, "high": 0, "medium": 0, "low": 0}
-            by_cat: Dict[str, int] = {}
-            examples = []
-            for issue in filtered_issues:
-                sev = (issue.get("severity") if isinstance(issue, dict) else getattr(issue, "severity", "")) or "unknown"
-                sev = str(sev).lower()
-                if sev in by_sev:
-                    by_sev[sev] += 1
-                cat = (issue.get("category") if isinstance(issue, dict) else getattr(issue, "category", "")) or "general"
-                cat = str(cat).lower()
-                by_cat[cat] = by_cat.get(cat, 0) + 1
-
-                # Build up to N concrete examples with file/line and a suggested fix if present
-                if len(examples) < max_examples:
-                    title = issue.get("title") if isinstance(issue, dict) else getattr(issue, "title", "Issue")
-                    desc = issue.get("description") if isinstance(issue, dict) else getattr(issue, "description", "")
-                    # Trim noisy content
-                    def _trim(txt: Optional[str], limit: int = 220) -> str:
-                        if not txt:
-                            return ""
-                        s = str(txt).strip()
-                        return (s[:limit] + "…") if len(s) > limit else s
-                    loc = issue.get("location") if isinstance(issue, dict) else getattr(issue, "location", None)
-                    file_path = None
-                    line_number = None
-                    if isinstance(loc, dict):
-                        file_path = loc.get("file_path")
-                        line_number = loc.get("line_number")
-                    else:
-                        file_path = getattr(loc, "file_path", None) if loc is not None else None
-                        line_number = getattr(loc, "line_number", None) if loc is not None else None
-                    suggestions = issue.get("suggestions") if isinstance(issue, dict) else getattr(issue, "suggestions", None)
-                    suggestion = None
-                    if suggestions:
-                        suggestion = suggestions[0] if isinstance(suggestions, list) else str(suggestions)
-                    example_line = f"- {cat} | {sev}: {_trim(title, 120)}"
-                    if file_path:
-                        example_line += f" — {file_path}"
-                        if line_number is not None:
-                            example_line += f":{line_number}"
-                    if desc:
-                        example_line += f"\n  Reason: {_trim(desc)}"
-                    if suggestion:
-                        example_line += f"\n  Fix: {_trim(suggestion, 160)}"
-                    examples.append(example_line)
-
-            sev_parts = [f"{k.capitalize()}: {v}" for k, v in by_sev.items() if v > 0]
-            cat_top = sorted(by_cat.items(), key=lambda x: x[1], reverse=True)[:3]
-            cat_parts = [f"{k} ({v})" for k, v in cat_top]
-
-            # Build concise response
-            if filtered_issues and is_specific_intent:
-                # Just the essentials for targeted questions
-                answer_lines = [f"{len(filtered_issues)} matched."]
-                answer_lines.extend(examples)
-            elif filtered_issues:
-                # Brief summary + a couple examples
-                answer_lines = [f"{len(filtered_issues)} matched out of {len(issues_list)} total."]
-                if examples:
-                    answer_lines.extend(examples)
-            else:
-                # No match — very short message
-                answer_lines = ["No matching issues found for your request."]
-
-            specific_answer = "\n".join(answer_lines)
-            usage_stats.questions_answered += 1
-            return Answer(
-                question=request.question,
-                answer=specific_answer,
-                confidence=0.9,
-                sources=["analysis_result"],
-            )
-        
-        # Generate answer using QA engine
+        # Always use the QA engine like CLI does - no custom filtering
         # Create a conversation ID for this session
         conversation_id = str(uuid.uuid4())
         
         # Index the analysis results if available and get conversation ID
         if context.get("analysis_result"):
-            conversation_id = qa_engine.index_codebase(context["analysis_result"])
+            ar = context["analysis_result"]
+            # Normalize to plain dict if we received a Pydantic model
+            try:
+                if not isinstance(ar, dict):
+                    if hasattr(ar, "model_dump") and callable(getattr(ar, "model_dump")):
+                        ar = ar.model_dump()
+                    elif hasattr(ar, "dict") and callable(getattr(ar, "dict")):
+                        ar = ar.dict()
+            except Exception:
+                pass
+            # If it's already a core AnalysisResult, use it directly
+            core_result = None
+            try:
+                if isinstance(ar, CoreAnalysisResult):
+                    core_result = ar
+                else:
+                    # Convert web/pydantic result (dict-like) to core AnalysisResult
+                    import os
+                    # If still not a dict at this point, bail to empty result to avoid attribute errors
+                    if not isinstance(ar, dict):
+                        logger.warning("analysis_result is not a dict after normalization; indexing empty core result")
+                        conversation_id = qa_engine.index_codebase(CoreAnalysisResult(codebase_path=""))
+                        raise RuntimeError("non_dict_analysis_result")
+
+                    codebase_path = ar.get("codebase_path") or ar.get("repository_url") or ""
+                    issues_raw = ar.get("issues", [])
+                    logger.info(f"📋 Converting analysis: codebase_path={codebase_path}, {len(issues_raw)} raw issues")
+                    
+                    # If no codebase_path, infer it from the first issue's file path
+                    if not codebase_path and issues_raw:
+                        for issue in issues_raw:
+                            loc = issue.get("location", {})
+                            file_path = loc.get("file_path", "")
+                            if file_path and os.path.isabs(file_path):
+                                # Extract directory from absolute path
+                                codebase_path = os.path.dirname(file_path)
+                                logger.info(f"Inferred codebase_path from issue file: {codebase_path}")
+                                break
+                    
+                    # Build core issues
+                    core_issues = []
+                    file_paths_set = set()
+                    for i in issues_raw:
+                        try:
+                            loc = i.get("location", {})
+                            file_path = loc.get("file_path") or ""
+                            file_paths_set.add(file_path)
+                            # Extract just the enum value name (e.g., "low" from "severitylevel.low")
+                            severity_str = str(i.get("severity", "info")).lower()
+                            if '.' in severity_str:
+                                severity_str = severity_str.split('.')[-1]  # Get last part after dot
+                            
+                            category_str = str(i.get("category", "general")).lower()
+                            if '.' in category_str:
+                                category_str = category_str.split('.')[-1]
+                            
+                            core_issue = CoreIssue(
+                                id=i.get("id") or str(uuid.uuid4()),
+                                category=CoreIssueCategory(category_str),
+                                severity=CoreSeverity(severity_str),
+                                title=i.get("title") or i.get("type") or "Issue",
+                                description=i.get("description") or "",
+                                location=CoreCodeLocation(
+                                    file_path=file_path,
+                                    line_start=loc.get("line_number") or loc.get("line_start") or 1,
+                                    line_end=(loc.get("line_number") or loc.get("line_end") or 1),
+                                    column_start=loc.get("column_number") or loc.get("column_start") or 0,
+                                    column_end=loc.get("column_end") or 0,
+                                ),
+                                affected_files=[file_path] if file_path else [],
+                                suggestion=(i.get("suggestions") or [None])[0] if isinstance(i.get("suggestions"), list) else (i.get("suggestions") or ""),
+                                confidence=float(i.get("confidence") or 0.8),
+                                metadata={},
+                            )
+                            core_issues.append(core_issue)
+                        except Exception as e:
+                            logger.error(f"Failed to convert issue: {e}, issue data: {i}")
+                            continue
+                    # Build parsed files with best-effort content (from disk)
+                    # IMPORTANT: Scan the ENTIRE codebase directory like CLI does, not just files with issues
+                    parsed_files = []
+                    def guess_language(p: str) -> str:
+                        if p.endswith('.py'): return 'python'
+                        if p.endswith('.ts'): return 'typescript'
+                        if p.endswith('.js'): return 'javascript'
+                        if p.endswith('.tsx'): return 'typescript'
+                        if p.endswith('.jsx'): return 'javascript'
+                        if p.endswith('.java'): return 'java'
+                        if p.endswith('.cpp'): return 'cpp'
+                        if p.endswith('.c'): return 'c'
+                        if p.endswith('.h'): return 'c'
+                        if p.endswith('.hpp'): return 'cpp'
+                        return 'unknown'
+                    
+                    # Get file contents from the job if available (for /analyze/files uploads)
+                    job_file_contents = {}
+                    if request.job_id and request.job_id in analysis_jobs:
+                        job = analysis_jobs[request.job_id]
+                        job_file_contents = job.get("file_contents", {})
+                    
+                    # First, add files that have issues (to ensure they're included)
+                    for fp in file_paths_set:
+                        try:
+                            # Try to get content from stored job data first
+                            content = job_file_contents.get(fp, "")
+                            
+                            # If not in job data, try reading from disk
+                            if not content and codebase_path:
+                                abs_path = fp if os.path.isabs(fp) else os.path.join(codebase_path, fp)
+                                try:
+                                    with open(abs_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                        content = f.read()
+                                except Exception:
+                                    content = ""
+                            
+                            if content:  # Only add if we have content
+                                parsed_files.append(CoreParsedFile(
+                                    path=fp,
+                                    language=guess_language(fp),
+                                    content=content,
+                                ))
+                        except Exception:
+                            continue
+                    
+                    # Also index all uploaded files from job_file_contents (for /analyze/files)
+                    if job_file_contents:
+                        indexed_paths = {pf.path for pf in parsed_files}
+                        for file_path, content in job_file_contents.items():
+                            if file_path not in indexed_paths and content:
+                                try:
+                                    parsed_files.append(CoreParsedFile(
+                                        path=file_path,
+                                        language=guess_language(file_path),
+                                        content=content,
+                                    ))
+                                    indexed_paths.add(file_path)
+                                except Exception:
+                                    continue
+                        logger.info(f"Indexed {len(parsed_files)} files from uploaded content")
+                    
+                    # Then, scan the entire codebase directory for ALL source files (like CLI does)
+                    if codebase_path and os.path.exists(codebase_path):
+                        supported_extensions = {'.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.cpp', '.c', '.h', '.hpp'}
+                        indexed_paths = {pf.path for pf in parsed_files}  # Avoid duplicates
+                        
+                        try:
+                            for root, dirs, files in os.walk(codebase_path):
+                                # Skip common directories to avoid
+                                dirs[:] = [d for d in dirs if d not in {'.git', '__pycache__', 'node_modules', '.venv', 'venv', 'env', 'build', 'dist'}]
+                                
+                                for file in files:
+                                    if any(file.endswith(ext) for ext in supported_extensions):
+                                        file_path = os.path.join(root, file)
+                                        rel_path = os.path.relpath(file_path, codebase_path)
+                                        
+                                        # Skip if already indexed
+                                        if rel_path in indexed_paths:
+                                            continue
+                                            
+                                        try:
+                                            with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
+                                                content = f.read()
+                                            
+                                            # Skip very large files (>500KB)
+                                            if len(content.encode('utf-8')) > 500 * 1024:
+                                                continue
+                                            
+                                            parsed_files.append(CoreParsedFile(
+                                                path=rel_path,
+                                                language=guess_language(file),
+                                                content=content,
+                                            ))
+                                            indexed_paths.add(rel_path)
+                                            
+                                        except Exception:
+                                            continue
+                            
+                            logger.info(f"Indexed {len(parsed_files)} total files from codebase: {codebase_path}")
+                            
+                        except Exception as scan_e:
+                            logger.warning(f"Could not scan full codebase directory: {scan_e}")
+                            # Continue with just the files that have issues
+                    core_result = CoreAnalysisResult(
+                        codebase_path=codebase_path or "",
+                        parsed_files=parsed_files,
+                        issues=core_issues,
+                    )
+                    logger.info(f"✅ Created core result: {len(core_issues)} issues, {len(parsed_files)} files")
+                conversation_id = qa_engine.index_codebase(core_result)
+            except Exception as conv_e:
+                logger.error(f"Failed to convert analysis result for QA indexing: {conv_e}")
+                # As a last resort, try indexing an empty core result (will still let QA run on LLM with no chunks)
+                empty_codebase_path = ""
+                try:
+                    if isinstance(ar, dict):
+                        empty_codebase_path = ar.get("codebase_path") or ""
+                except Exception:
+                    empty_codebase_path = ""
+                conversation_id = qa_engine.index_codebase(CoreAnalysisResult(codebase_path=empty_codebase_path))
         
-        # Ask the question
-        answer_text, confidence = qa_engine.ask_question(
-            question=request.question,
-            conversation_id=conversation_id
-        )
+        # Ask the question using the same QA engine as CLI
+        try:
+            answer_text, confidence = qa_engine.ask_question(
+                question=request.question,
+                conversation_id=conversation_id
+            )
+        except Exception as inner_e:
+            logger.error(f"QA engine failed, falling back to issue-grounded summary: {inner_e}")
+            # Fallback: build a concise summary from available issues (if any)
+            issues_list = _extract_issues(context)
+            if issues_list:
+                def _trim(txt: Optional[str], limit: int = 220) -> str:
+                    if not txt:
+                        return ""
+                    s = str(txt).strip()
+                    return (s[:limit] + "…") if len(s) > limit else s
+                examples = []
+                for i, issue in enumerate(issues_list):
+                    if i >= 2:
+                        break
+                    if isinstance(issue, dict):
+                        title = issue.get("title")
+                        desc = issue.get("description")
+                        cat = str(issue.get("category", "")).lower() or "general"
+                        sev = str(issue.get("severity", "")).lower() or "info"
+                        loc = issue.get("location") or {}
+                        fp = loc.get("file_path")
+                        ln = loc.get("line_number")
+                    else:
+                        title = getattr(issue, "title", "Issue")
+                        desc = getattr(issue, "description", "")
+                        cat = str(getattr(issue, "category", "") or "general").lower()
+                        sev = str(getattr(issue, "severity", "") or "info").lower()
+                        loc = getattr(issue, "location", None)
+                        fp = getattr(loc, "file_path", None) if loc is not None else None
+                        ln = getattr(loc, "line_number", None) if loc is not None else None
+                    line = f"- {cat} | {sev}: {_trim(title, 120)}"
+                    if fp:
+                        line += f" — {fp}"
+                        if ln is not None:
+                            line += f":{ln}"
+                    if desc:
+                        line += f"\n  Reason: {_trim(desc)}"
+                    examples.append(line)
+                answer_text = "\n".join([f"{len(issues_list)} matched out of {len(issues_list)} total."] + examples)
+            else:
+                answer_text = "No matching issues found for your request."
         
         usage_stats.questions_answered += 1
         
         return Answer(
             question=request.question,
             answer=answer_text,
-            confidence=0.8,  # Would be calculated by QA engine
+            confidence=None,
             sources=["analysis_result"] if request.job_id else None
         )
         
@@ -1213,7 +1500,6 @@ async def run_repository_analysis(job_id: str, request: RepositoryRequest, confi
                 job["progress"] = 30.0
                 
                 # Configure analysis options
-                from ..core.models import AnalysisOptions
                 analysis_options = AnalysisOptions(
                     include_patterns=request.include_patterns or ["*.py", "*.js", "*.ts"],
                     exclude_patterns=request.exclude_patterns or [],
@@ -1229,6 +1515,57 @@ async def run_repository_analysis(job_id: str, request: RepositoryRequest, confi
                 job["current_step"] = "Generating report"
                 job["progress"] = 90.0
                 
+                # Convert core issues to web format
+                web_issues = []
+                for core_issue in analysis_result.issues:
+                    try:
+                        # Extract enum value name
+                        severity_str = str(core_issue.severity.value).lower()
+                        if '.' in severity_str:
+                            severity_str = severity_str.split('.')[-1]
+                        
+                        category_str = str(core_issue.category.value).lower()
+                        if '.' in category_str:
+                            category_str = category_str.split('.')[-1]
+                        
+                        web_issue = Issue(
+                            id=core_issue.id,
+                            category=category_str,
+                            type=category_str,
+                            severity=severity_str,
+                            confidence=core_issue.confidence,
+                            title=core_issue.title,
+                            description=core_issue.description,
+                            location=IssueLocation(
+                                file_path=core_issue.location.file_path,
+                                line_number=core_issue.location.line_start,
+                                column_number=core_issue.location.column_start,
+                                function_name=core_issue.metadata.get('function_name'),
+                                class_name=core_issue.metadata.get('class_name')
+                            ),
+                            suggestions=[core_issue.suggestion] if core_issue.suggestion else None
+                        )
+                        web_issues.append(web_issue)
+                    except Exception as e:
+                        logger.error(f"Failed to convert issue: {e}")
+                        continue
+                
+                # Get metrics
+                raw_metrics = {}
+                if hasattr(analysis_result, 'metrics') and analysis_result.metrics:
+                    m = analysis_result.metrics
+                    try:
+                        if hasattr(m, 'to_dict') and callable(getattr(m, 'to_dict')):
+                            raw_metrics = m.to_dict()
+                        elif hasattr(m, 'model_dump') and callable(getattr(m, 'model_dump')):
+                            raw_metrics = m.model_dump()
+                        elif isinstance(m, dict):
+                            raw_metrics = m
+                        else:
+                            raw_metrics = dict(m.__dict__)
+                    except Exception:
+                        raw_metrics = {}
+                
                 # Create comprehensive result
                 result = AnalysisResult(
                     job_id=job_id,
@@ -1239,11 +1576,11 @@ async def run_repository_analysis(job_id: str, request: RepositoryRequest, confi
                     started_at=job["started_at"],
                     completed_at=datetime.utcnow(),
                     duration_seconds=(datetime.utcnow() - job["started_at"]).total_seconds(),
-                    issues=analysis_result.get("issues", []),
+                    issues=web_issues,
                     summary={
                         "total_files": len(files_to_analyze),
-                        "files_analyzed": analysis_result.get("files_analyzed", 0),
-                        "issues_found": len(analysis_result.get("issues", [])),
+                        "files_analyzed": len(analysis_result.parsed_files),
+                        "issues_found": len(web_issues),
                         "repository_info": {
                             "owner": owner,
                             "name": repo_name,
@@ -1252,7 +1589,7 @@ async def run_repository_analysis(job_id: str, request: RepositoryRequest, confi
                             "author": commit_info.get("author_name")
                         }
                     },
-                    metrics=analysis_result.get("metrics", {})
+                    metrics=raw_metrics
                 )
             else:
                 # Fallback mock result when orchestrator is not available
@@ -1344,21 +1681,25 @@ async def run_file_analysis(job_id: str, request: FileAnalysisRequest, config: O
             
             # Run analysis if orchestrator is available
             if orchestrator:
-                logger.info(f"Running file analysis with orchestrator for {len(request.files)} files")
+                logger.info(f"✓ Orchestrator available, running analysis for {len(request.files)} files")
+                logger.info(f"  Analysis types requested: {request.analysis_types}")
+                logger.info(f"  Temp directory: {temp_dir}")
+                logger.info(f"  Files written: {list(request.content.keys())}")
+                
                 # Configure analysis options
-                from ..core.models import AnalysisOptions
                 analysis_options = AnalysisOptions(
-                    include_patterns=["*"],
+                    include_patterns=["*.py", "*.js", "*.ts"],
                     exclude_patterns=[],
-                    categories=request.analysis_types or ["all"]
+                    categories=request.analysis_types or None  # None means all
                 )
                 
                 # Run orchestrator analysis
+                logger.info(f"  Calling orchestrator.analyze_codebase...")
                 analysis_result = orchestrator.analyze_codebase(
                     path=temp_dir,
                     options=analysis_options
                 )
-                logger.info(f"Orchestrator analysis completed, found {len(analysis_result.issues) if hasattr(analysis_result, 'issues') else 0} issues")
+                logger.info(f"✓ Orchestrator completed: {len(analysis_result.issues) if hasattr(analysis_result, 'issues') else 0} issues found")
                 
                 job["current_step"] = "Generating report"
                 job["progress"] = 90.0
@@ -1369,6 +1710,11 @@ async def run_file_analysis(job_id: str, request: FileAnalysisRequest, config: O
                     logger.info(f"Converting {len(analysis_result.issues)} issues to web API format")
                     for core_issue in analysis_result.issues:
                         try:
+                            # Normalize file path to be relative (remove temp_dir prefix)
+                            file_path = core_issue.location.file_path
+                            if file_path.startswith(temp_dir):
+                                file_path = os.path.relpath(file_path, temp_dir)
+                            
                             # Convert core Issue to web API Issue
                             web_issue = Issue(
                                 id=core_issue.id,
@@ -1379,7 +1725,7 @@ async def run_file_analysis(job_id: str, request: FileAnalysisRequest, config: O
                                 title=core_issue.title,
                                 description=core_issue.description,
                                 location=IssueLocation(
-                                    file_path=core_issue.location.file_path,
+                                    file_path=file_path,  # Use normalized path
                                     line_number=core_issue.location.line_start,
                                     column_number=core_issue.location.column_start,
                                     function_name=core_issue.metadata.get('function_name'),
@@ -1395,21 +1741,47 @@ async def run_file_analysis(job_id: str, request: FileAnalysisRequest, config: O
                     logger.info("No issues found in analysis result")
                 
                 # Create comprehensive result
+                # Normalize metrics to a plain dict for API schema
+                raw_metrics = {}
+                if hasattr(analysis_result, 'metrics') and analysis_result.metrics is not None:
+                    m = analysis_result.metrics
+                    try:
+                        if hasattr(m, 'to_dict') and callable(getattr(m, 'to_dict')):
+                            raw_metrics = m.to_dict()
+                        elif hasattr(m, 'model_dump') and callable(getattr(m, 'model_dump')):
+                            raw_metrics = m.model_dump()
+                        elif isinstance(m, dict):
+                            raw_metrics = m
+                        else:
+                            # Best-effort conversion
+                            raw_metrics = dict(m.__dict__)
+                    except Exception:
+                        raw_metrics = {}
+
+                # Store file contents in the job for Q&A access
+                job["file_contents"] = request.content  # Keep the original file contents
+                job["file_list"] = list(request.files)  # Keep the file list
+                
                 result = AnalysisResult(
                     job_id=job_id,
                     status=AnalysisStatus.COMPLETED,
                     started_at=job["started_at"],
                     completed_at=datetime.utcnow(),
                     duration_seconds=(datetime.utcnow() - job["started_at"]).total_seconds(),
+                    codebase_path=None,  # Will be inferred from issue file paths in Q&A
                     issues=web_issues,
                     summary={
                         "files_analyzed": len(request.files),
                         "total_issues": len(web_issues)
                     },
-                    metrics=analysis_result.metrics if hasattr(analysis_result, 'metrics') else {}
+                    metrics=raw_metrics
                 )
             else:
-                # Fallback: create basic result without orchestrator
+                # Fallback: No orchestrator, create result with 0 issues
+                logger.warning("✗ Orchestrator NOT available - using fallback with 0 issues")
+                job["file_contents"] = request.content
+                job["file_list"] = list(request.files)
+                
                 result = AnalysisResult(
                     job_id=job_id,
                     status=AnalysisStatus.COMPLETED,
@@ -1636,42 +2008,7 @@ async def check_rate_limit_async(current_user: Dict[str, Any]):
             )
 
 
-# Add QA engine async method (real implementation)
-async def answer_question_async(qa_engine, question: str, context: Dict[str, Any], 
-                               file_path: Optional[str] = None, issue_id: Optional[str] = None) -> str:
-    """Real async method for QA engine."""
-    try:
-        # Get analysis result from context
-        analysis_result = context.get("analysis_result")
-        if not analysis_result:
-            return "No analysis data available. Please run an analysis first."
-        
-        # Use the LLM service to answer the question
-        if hasattr(qa_engine, 'llm_service') and qa_engine.llm_service:
-            # Create a proper context for the LLM
-            context_info = f"File: {file_path}" if file_path else ""
-            if hasattr(analysis_result, 'issues') and analysis_result.issues:
-                context_info += f"\nFound {len(analysis_result.issues)} issues in the analysis."
-            
-            # Use a simpler approach for now
-            answer = f"Based on the analysis of your code, I found several issues:\n\n"
-            if hasattr(analysis_result, 'issues') and analysis_result.issues:
-                for i, issue in enumerate(analysis_result.issues[:3], 1):
-                    answer += f"{i}. {issue.description}\n"
-                    if hasattr(issue, 'suggestion') and issue.suggestion:
-                        answer += f"   Suggestion: {issue.suggestion}\n"
-            else:
-                answer += "The analysis completed but no specific issues were detected. This could mean your code follows good practices, or the analyzers need to be configured to detect more specific patterns."
-            
-            return answer
-        else:
-            return "LLM service not available."
-    except Exception as e:
-        logger.error(f"Error in QA engine: {e}")
-        return f"Error generating answer: {str(e)}"
-
-# Monkey patch the async method for QA engine
-QAEngine.answer_question_async = answer_question_async
+# Removed hardcoded fallback - using real QA engine only
 
 # Add async method to orchestrator if not available
 async def analyze_codebase_async(orchestrator_instance, codebase_path: str, options: Dict[str, Any], progress_callback=None):

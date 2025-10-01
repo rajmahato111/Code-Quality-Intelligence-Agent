@@ -470,7 +470,14 @@ def display_analysis_summary(result: AnalysisResult) -> None:
     # Add summary rows
     table.add_row("Files Analyzed", str(len(result.parsed_files)))
     table.add_row("Total Issues", str(len(result.issues)))
-    table.add_row("Overall Quality Score", f"{result.metrics.overall_score:.1f}/100")
+    
+    # Use smart score priority: maintainability_index if overall_score is 0
+    display_score = result.metrics.overall_score
+    if display_score <= 0 and hasattr(result.metrics, 'maintainability_index'):
+        display_score = result.metrics.maintainability_index
+    
+    # Round to match Web UI display (87 instead of 87.1)
+    table.add_row("Overall Quality Score", f"{round(display_score)}/100")
     
     # Add issue breakdown by category
     category_counts = {}

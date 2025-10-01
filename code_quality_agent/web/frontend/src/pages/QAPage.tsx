@@ -8,13 +8,11 @@ import {
   Bot, 
   User, 
   Lightbulb,
-  FileText,
-  Code,
   AlertCircle,
   Loader
 } from 'lucide-react'
 import { apiService, QuestionRequest, Answer } from '../services/api'
-import CodeSnippet from '../components/CodeSnippet'
+// CodeSnippet unused here; remove import to satisfy linter
 
 interface ChatMessage {
   id: string
@@ -42,7 +40,7 @@ const QAPage: React.FC = () => {
   // Question mutation
   const questionMutation = useMutation({
     mutationFn: (request: QuestionRequest) => apiService.askQuestion(request),
-    onSuccess: (answer, variables) => {
+    onSuccess: (answer) => {
       const assistantMessage: ChatMessage = {
         id: Date.now().toString() + '_assistant',
         type: 'assistant',
@@ -91,6 +89,9 @@ const QAPage: React.FC = () => {
       question: inputValue.trim(),
       job_id: jobId,
       file_path: selectedFile || undefined,
+      // Pass analysis context to ensure API builds the same issue-grounded
+      // answer format as the CLI ("N matched out of M total.")
+      context: analysisResult ? { analysis_result: analysisResult } : undefined,
     }
 
     // Send question
@@ -239,7 +240,7 @@ const QAPage: React.FC = () => {
                         {message.answer && (
                           <div className="mt-3 pt-3 border-t border-gray-300 text-xs opacity-75">
                             <div className="flex items-center justify-between">
-                              <span>Confidence: {Math.round(message.answer.confidence * 100)}%</span>
+                              {/* Confidence intentionally hidden in web UI */}
                               {message.answer.sources && message.answer.sources.length > 0 && (
                                 <span>Sources: {message.answer.sources.join(', ')}</span>
                               )}

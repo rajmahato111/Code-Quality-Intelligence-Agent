@@ -186,6 +186,11 @@ class InteractiveQAShell:
     
     def _display_welcome(self) -> None:
         """Display welcome message and instructions."""
+        # Use smart score priority: maintainability_index if overall_score is 0
+        display_score = self.analysis_result.metrics.overall_score
+        if display_score <= 0 and hasattr(self.analysis_result.metrics, 'maintainability_index'):
+            display_score = self.analysis_result.metrics.maintainability_index
+        
         welcome_text = f"""
 [bold blue]🤖 Interactive Q&A Mode[/bold blue]
 
@@ -194,7 +199,7 @@ Welcome to the interactive Q&A session for your codebase!
 [bold]Codebase:[/bold] {self.analysis_result.codebase_path}
 [bold]Files Analyzed:[/bold] {len(self.analysis_result.parsed_files)}
 [bold]Issues Found:[/bold] {len(self.analysis_result.issues)}
-[bold]Quality Score:[/bold] {self.analysis_result.metrics.overall_score:.1f}/100
+[bold]Quality Score:[/bold] {round(display_score)}/100
 
 [bold green]How to use:[/bold green]
 • Ask natural language questions about your code
@@ -259,35 +264,19 @@ Welcome to the interactive Q&A session for your codebase!
             # Ask the question
             answer, confidence = self.qa_engine.ask_question(question, self.conversation_id)
             
-            # Display the answer
-            self._display_answer(question, answer, confidence)
+            # Display the answer (hide confidence from output)
+            self._display_answer(question, answer)
             
         except Exception as e:
             console.print(f"[red]❌ Error processing question: {e}[/red]")
             logger.error(f"Question processing failed: {e}")
     
-    def _display_answer(self, question: str, answer: str, confidence: float) -> None:
-        """Display the Q&A answer with formatting."""
-        # Confidence indicator
-        if confidence >= 0.8:
-            confidence_color = "green"
-            confidence_icon = "🟢"
-        elif confidence >= 0.6:
-            confidence_color = "yellow"
-            confidence_icon = "🟡"
-        else:
-            confidence_color = "red"
-            confidence_icon = "🔴"
-        
+    def _display_answer(self, question: str, answer: str) -> None:
+        """Display the Q&A answer with formatting (confidence hidden)."""
         # Create question section with Rich markup
         question_section = Text()
         question_section.append("Question: ", style="bold")
         question_section.append(question)
-        
-        # Create confidence section with Rich markup
-        confidence_section = Text()
-        confidence_section.append(f"{confidence_icon} Confidence: ", style="dim")
-        confidence_section.append(f"{confidence:.1%}", style=f"dim {confidence_color}")
         
         # Create the answer content with proper markdown rendering
         console.print(Panel(question_section, title="🤖 AI Assistant", border_style="green"))
@@ -302,12 +291,7 @@ Welcome to the interactive Q&A session for your codebase!
             console.print(answer)
             logger.debug(f"Markdown rendering failed: {e}")
         
-        # Show confidence at the bottom
-        console.print(f"\n{confidence_section}")
-        
-        # Show related suggestions if confidence is low
-        if confidence < 0.6:
-            self._show_suggestions()
+        # Confidence intentionally hidden in CLI output
     
     def _show_suggestions(self) -> None:
         """Show suggestions for better questions."""

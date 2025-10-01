@@ -66,15 +66,54 @@ const MetricsOverview: React.FC<MetricsOverviewProps> = ({ result }) => {
   }
 
   const getOverallScore = () => {
-    // Use the exact same scoring as CLI - no fallback, no multiplication
-    // Check both possible data structures from API
-    if (result.metrics?.overall_score !== undefined) {
+    // Priority order for scoring:
+    // 1. overall_score if > 0 (issue density based)
+    // 2. maintainability_index (complexity + technical debt based)
+    // 3. quality_score from App.js calculation
+    // 4. Calculate from category scores
+    
+    console.log('🔍 MetricsOverview - Debugging score calculation:')
+    console.log('  result.metrics:', result.metrics)
+    console.log('  result.quality_score:', result.quality_score)
+    
+    // Check overall_score first, but only if it's > 0
+    if (result.metrics?.overall_score !== undefined && result.metrics.overall_score > 0) {
+      console.log('  ✅ Using overall_score:', result.metrics.overall_score)
       return Math.round(result.metrics.overall_score)
+    } else {
+      console.log('  ❌ Skipping overall_score (value:', result.metrics?.overall_score, ')')
     }
+    
+    // Fall back to maintainability_index (often more reliable)
+    if (result.metrics?.maintainability_index !== undefined) {
+      console.log('  ✅ Using maintainability_index:', result.metrics.maintainability_index)
+      return Math.round(result.metrics.maintainability_index)
+    } else {
+      console.log('  ❌ No maintainability_index found')
+    }
+    
+    // Use quality_score from App.js if available
     if (result.quality_score !== undefined) {
+      console.log('  ✅ Using quality_score:', result.quality_score)
       return Math.round(result.quality_score)
+    } else {
+      console.log('  ❌ No quality_score found')
     }
-    // If no score available, return 0 (same as CLI behavior)
+    
+    // Calculate from category scores as last resort
+    if (result.metrics?.category_scores) {
+      const scores = Object.values(result.metrics.category_scores) as number[]
+      if (scores.length > 0) {
+        const avg = scores.reduce((a, b) => a + b, 0) / scores.length
+        console.log('  ✅ Using category average:', avg)
+        return Math.round(avg)
+      }
+    } else {
+      console.log('  ❌ No category_scores found')
+    }
+    
+    // If nothing else, return 0
+    console.log('  ⚠️ Returning default: 0')
     return 0
   }
 

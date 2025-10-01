@@ -252,7 +252,6 @@ class TextFormatter(BaseFormatter):
             lines.append(f"   Category: {issue.category.value.upper()}")
             lines.append(f"   Severity: {severity_color}{issue.severity.value.upper()}{self.colors['reset']}")
             lines.append(f"   Location: {issue.location.file_path}:{issue.location.line_start}")
-            lines.append(f"   Confidence: {issue.confidence:.1f}")
             lines.append("")
             
             # Description
@@ -565,7 +564,6 @@ class MarkdownFormatter(BaseFormatter):
             lines.append(f"| Category | {issue.category.value.upper()} |")
             lines.append(f"| Severity | {severity_emoji} {issue.severity.value.upper()} |")
             lines.append(f"| Location | `{issue.location.file_path}:{issue.location.line_start}` |")
-            lines.append(f"| Confidence | {issue.confidence:.1f} |")
             lines.append("")
             
             # Description
@@ -926,7 +924,6 @@ class HTMLFormatter(BaseFormatter):
                 severity_class = f"severity-{issue.severity.value.lower()}"
                 html_parts.append(f"<span class='{severity_class}'>⚠️ Severity: {issue.severity.value.upper()}</span>")
                 html_parts.append(f"<span class='code-location'>📍 {html.escape(issue.location.file_path)}:{issue.location.line_start}</span>")
-                html_parts.append(f"<span>🎯 Confidence: {issue.confidence:.1f}</span>")
                 html_parts.append("</div>")
                 
                 # Collapsible content

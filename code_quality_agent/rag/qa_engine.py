@@ -50,11 +50,13 @@ class CodebaseContext:
     
     def to_summary(self) -> str:
         """Generate a summary string of the codebase context."""
+        # Emphasize issues count over quality score
+        issues_text = f"{self.total_issues} issues found" if self.total_issues > 0 else "No issues found"
         return f"""Codebase: {self.codebase_path}
-Files: {self.total_files}
-Issues: {self.total_issues}
+Files Analyzed: {self.total_files}
+Code Quality Analysis: {issues_text}
 Languages: {', '.join(self.languages)}
-Quality Score: {self.quality_score:.1f}/100"""
+Note: Focus on the specific issues and code details when answering questions."""
 
 
 @dataclass
@@ -272,14 +274,17 @@ class QAEngine:
         
         # Create codebase context
         languages = list(set(f.language for f in analysis_result.parsed_files))
+        issue_count = len(analysis_result.issues)
+        logger.info(f"Creating codebase context: {len(analysis_result.parsed_files)} files, {issue_count} issues")
         codebase_context = CodebaseContext(
             codebase_path=analysis_result.codebase_path,
             total_files=len(analysis_result.parsed_files),
-            total_issues=len(analysis_result.issues),
+            total_issues=issue_count,
             languages=languages,
-            quality_score=analysis_result.metrics.overall_score,
+            quality_score=analysis_result.metrics.overall_score if hasattr(analysis_result.metrics, 'overall_score') else 0.0,
             analysis_result=analysis_result
         )
+        logger.info(f"Codebase summary for LLM: {codebase_context.to_summary()}")
         
         # Create conversation
         conversation_id = str(uuid.uuid4())

@@ -41,7 +41,15 @@ class GitHubIntegration:
         """Async context manager entry."""
         if not aiohttp:
             raise RuntimeError("aiohttp is required for GitHub integration. Install with: pip install aiohttp")
-        self.session = aiohttp.ClientSession()
+        
+        # Create SSL context using certifi's CA bundle
+        import ssl
+        import certifi
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        
+        # Create aiohttp connector with SSL context
+        connector = aiohttp.TCPConnector(ssl=ssl_context)
+        self.session = aiohttp.ClientSession(connector=connector)
         return self
     
     async def __aexit__(self, exc_type, exc_val, exc_tb):

@@ -191,12 +191,14 @@ npm run dev
 
 ### Features
 
-- **File Upload**: Drag and drop files for analysis
-- **GitHub Integration**: Analyze repositories directly from GitHub URLs
-- **Local Path Analysis**: Analyze files from your local filesystem
-- **Real-time Results**: See analysis results as they're generated
-- **Interactive Reports**: Browse issues by category and severity
-- **Quality Score Visualization**: Visual representation of code quality metrics
+- **File Upload**: Drag and drop files or select from file picker for instant analysis
+- **GitHub Integration**: Analyze repositories directly from GitHub URLs with automatic branch detection
+- **Local Path Analysis**: Analyze files and directories from your local filesystem
+- **Real-time Results**: See analysis progress and results as they're generated
+- **Interactive Reports**: Browse issues by category and severity with detailed explanations
+- **Quality Score Visualization**: Visual representation of code quality metrics using actual backend scoring
+- **AI-Powered Q&A**: Ask natural language questions about your analyzed code and get contextual answers
+- **Secure SSL Support**: GitHub repository cloning with proper SSL certificate verification
 
 ### Web API Endpoints
 
@@ -219,9 +221,19 @@ curl -X POST "http://localhost:8000/analyze/files" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_API_KEY" \
   -d '{
-    "files": ["example.py"],
-    "content": {"example.py": "print(\"Hello World\")"},
-    "analysis_types": ["security", "complexity"]
+    "request": {
+      "files": ["example.py"],
+      "content": {"example.py": "print(\"Hello World\")"},
+      "analysis_types": ["security", "complexity"]
+    }
+  }'
+
+# Analyze local path
+curl -X POST "http://localhost:8000/analyze/path" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -d '{
+    "path": "/path/to/your/code"
   }'
 
 # Get analysis results
@@ -369,12 +381,14 @@ python3 -m code_quality_agent.cli.main server --host 0.0.0.0 --port 8000
 ```
 
 API endpoints:
-- `POST /analyze/repository` - Analyze GitHub repository
-- `POST /analyze/files` - Analyze uploaded files
-- `GET /analyze/{job_id}` - Get analysis results
-- `POST /qa/ask` - Ask questions about analyzed code
-- `GET /health` - Health check
-- `GET /demo/api-key` - Get demo API key
+- `POST /analyze/repository` - Analyze GitHub repository with automatic branch detection
+- `POST /analyze/files` - Analyze uploaded files with full content
+- `POST /analyze/path` - Analyze local filesystem path
+- `GET /analyze/{job_id}` - Get analysis results with polling support
+- `GET /analyze/{job_id}/progress` - Get real-time analysis progress
+- `POST /qa/ask` - Ask questions about analyzed code with context-aware answers
+- `GET /health` - Health check endpoint
+- `GET /demo/api-key` - Get demo API key for testing
 
 Example API usage:
 ```bash
@@ -672,10 +686,13 @@ A: Create a `.cqa.yaml` configuration file to customize patterns, thresholds, an
 A: Analysis time scales roughly linearly with codebase size. A 100k LOC Python project typically takes 2-5 minutes with AI features enabled, 30-60 seconds without.
 
 **Q: Why do I get different results between CLI and web interface?**
-A: This was a known issue that has been fixed. Both interfaces now use the same analysis engine and should produce identical results. If you still see differences, ensure both are using the same settings and `--no-cache` flag.
+A: Both interfaces now use the same analysis engine and produce identical results. The web UI Q&A feature matches CLI behavior exactly, providing the same context-aware answers based on the actual analysis results.
 
 **Q: How accurate are the quality scores?**
-A: Quality scores are calculated using a penalty-based system where different severity levels have different penalties. The scoring has been optimized to provide meaningful, actionable feedback rather than overly strict assessments.
+A: Quality scores use the backend's metrics (overall_score or maintainability_index) calculated from issue density, complexity, and technical debt. Scores reflect actual code quality with appropriate weighting for severity levels, providing meaningful and actionable feedback.
+
+**Q: Does GitHub repository analysis work with private repos?**
+A: The current implementation supports public repositories. For private repos, you can clone locally and use the local path analysis feature. We're working on GitHub token authentication for private repo support.
 
 ### Troubleshooting Questions
 
@@ -702,14 +719,17 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📊 Project Status
 
 - ✅ Core analysis engine
-- ✅ Python and JavaScript support  
-- ✅ CLI interface
+- ✅ Multi-language support (Python, JavaScript, TypeScript)
+- ✅ CLI interface with interactive mode
 - ✅ Web interface (React + FastAPI)
-- ✅ Quality scoring system
-- ✅ Multiple analyzer types (Security, Performance, Complexity, etc.)
-- ✅ File upload and GitHub integration
-- 🚧 Interactive Q&A mode
-- 🚧 Additional language support (TypeScript, Java, etc.)
+- ✅ Quality scoring system with backend metrics
+- ✅ Multiple analyzer types (Security, Performance, Complexity, Duplication, Testing, Documentation)
+- ✅ File upload, GitHub integration, and local path analysis
+- ✅ Interactive Q&A mode with RAG (CLI and Web UI)
+- ✅ GitHub repository cloning with SSL certificate support
+- ✅ Context-aware Q&A matching CLI behavior
+- 🚧 Additional language support (Java, Go, Rust, etc.)
+- 🚧 Private repository support with GitHub tokens
 
 ## 🏗 Architecture Overview
 
