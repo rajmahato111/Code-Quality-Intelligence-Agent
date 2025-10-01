@@ -505,7 +505,7 @@ The Code Quality Intelligence Agent follows a modular, plugin-based architecture
 
 ### Architecture Overview
 
-![Application Architecture](diagrams/user_flow%20-%20Application%20Architecture.svg)
+![Application Architecture](architecture_diagrams/user_flow%20-%20Application%20Architecture.svg)
 
 The system architecture consists of several key layers:
 
@@ -545,7 +545,7 @@ The system architecture consists of several key layers:
 
 ### User Flow
 
-![User Flow Diagram](diagrams/user_flow%20-%20Updated%20Userflow%20Diagram.svg)
+![User Flow Diagram](architecture_diagrams/user_flow%20-%20Updated%20Userflow%20Diagram.svg)
 
 The user interaction flow follows these key paths:
 
@@ -569,7 +569,7 @@ The user interaction flow follows these key paths:
 
 ### System Sequence Diagram
 
-![System Sequence](diagrams/System%20Sequence.svg)
+![System Sequence](architecture_diagrams/System%20Sequence.svg)
 
 This end-to-end sequence shows a single analysis run: User triggers the CLI, the Orchestrator discovers files, the Parser builds multi-language ASTs, analyzers run across categories, the LLM service generates explanations and fix suggestions, and the Report Generator returns prioritized results to the CLI. Notes highlight cache behavior (`--no-cache`), analyzer initialization, total issues, and severity scoring.
 
