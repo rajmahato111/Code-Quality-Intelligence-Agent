@@ -9,7 +9,7 @@ An AI-powered tool that analyzes code repositories to generate actionable, devel
 **Want to test this immediately?** After cloning and installing (see Quick Start below), try:
 
 ```bash
-# 1. Test with a single file (30 seconds)
+# 1. Test with a single file
 python3 -m code_quality_agent.cli.main analyze test_qa/performance_issues.py
 
 # 2. Try the interactive Q&A (ask questions about your code)
@@ -740,7 +740,7 @@ python3 -m code_quality_agent.cli.main analyze ./src
 ### General Questions
 
 **Q: What programming languages are supported?**
-A: Currently Python, JavaScript, and TypeScript. We're working on adding Java, C#, Go, and Rust support.
+A: Currently Python, JavaScript, and TypeScript.
 
 **Q: How accurate are the AI-generated explanations?**
 A: Our explanations are generated using state-of-the-art LLMs and are continuously validated against known issue databases. Accuracy varies by issue type, typically 85-95% for security and complexity issues.
@@ -815,8 +815,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - ✅ Interactive Q&A mode with RAG (CLI and Web UI)
 - ✅ GitHub repository cloning with SSL certificate support
 - ✅ Context-aware Q&A matching CLI behavior
-- 🚧 Additional language support (Java, Go, Rust, etc.)
-- 🚧 Private repository support with GitHub tokens
 
 ## 🏗 Architecture Overview
 
